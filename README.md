@@ -1,4 +1,4 @@
-# ♟ Time Chess
+# ♟ Time-Attack Chess
 
 A full-stack chess application with a custom **Time-Attack** game mode — built from scratch with a bitboard-based engine in Go and a real-time React frontend.
 
