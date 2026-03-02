@@ -4,6 +4,14 @@ import Timer from '../components/Timer';
 import type { GameStateResponse, SquareInfo, LegalMoveInfo } from '../services/api';
 import { ChessWebSocket } from '../services/websocket';
 import type { TimerUpdate, GameOver, ErrorMsg } from '../services/websocket';
+import {
+    playMoveSound,
+    playCaptureSound,
+    playCheckSound,
+    playCastleSound,
+    playGameEndSound,
+    playGameStartSound,
+} from '../sounds';
 
 interface GameProps {
     gameId: string;
@@ -35,6 +43,8 @@ const Game: React.FC<GameProps> = ({ gameId, playerColor, onLeave }) => {
     const prevBlackTime = useRef<number>(60000);
     const deltaKeyRef = useRef(0);
     const lastCheckState = useRef(false);
+    const prevBoard = useRef<SquareInfo[]>(INITIAL_BOARD);
+    const isFirstUpdate = useRef(true);
 
     const wsRef = useRef<ChessWebSocket | null>(null);
 
@@ -84,9 +94,41 @@ const Game: React.FC<GameProps> = ({ gameId, playerColor, onLeave }) => {
                     }
                 }
 
+                // Play sound effects
+                if (gs.lastMoveFrom >= 0 && gs.lastMoveTo >= 0 && !isFirstUpdate.current) {
+                    if (gs.isCheckmate) {
+                        // Checkmate - play game end sound
+                        playGameEndSound();
+                    } else if (gs.isCheck) {
+                        // Check sound
+                        playCheckSound();
+                    } else {
+                        // Detect castling: king moved 2+ squares horizontally
+                        const fromFile = gs.lastMoveFrom % 8;
+                        const toFile = gs.lastMoveTo % 8;
+                        const isCastle = Math.abs(fromFile - toFile) >= 2 &&
+                            gs.board[gs.lastMoveTo]?.piece === 'K';
+
+                        if (isCastle) {
+                            playCastleSound();
+                        } else {
+                            // Detect capture: was there a piece on target square before?
+                            const prevPiece = prevBoard.current[gs.lastMoveTo];
+                            const wasCapture = prevPiece?.piece && prevPiece.piece !== '';
+                            if (wasCapture) {
+                                playCaptureSound();
+                            } else {
+                                playMoveSound();
+                            }
+                        }
+                    }
+                }
+                isFirstUpdate.current = false;
+
                 lastCheckState.current = gs.isCheck;
                 prevWhiteTime.current = gs.whiteTime;
                 prevBlackTime.current = gs.blackTime;
+                prevBoard.current = [...gs.board];
                 break;
             }
             case 'TIMER_UPDATE': {
@@ -102,6 +144,7 @@ const Game: React.FC<GameProps> = ({ gameId, playerColor, onLeave }) => {
                 setIsGameOver(true);
                 setGameResult(go_.result);
                 setGameOverReason(go_.reason);
+                playGameEndSound();
                 break;
             }
             case 'ERROR': {
@@ -115,7 +158,10 @@ const Game: React.FC<GameProps> = ({ gameId, playerColor, onLeave }) => {
 
     useEffect(() => {
         const ws = new ChessWebSocket(gameId, playerColor, handleMessage);
-        ws.setOnOpen(() => setConnected(true));
+        ws.setOnOpen(() => {
+            setConnected(true);
+            playGameStartSound();
+        });
         ws.setOnClose(() => setConnected(false));
         ws.connect();
         wsRef.current = ws;
