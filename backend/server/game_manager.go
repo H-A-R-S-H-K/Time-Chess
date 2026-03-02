@@ -50,14 +50,16 @@ type GameSession struct {
 
 // GameManager manages all active game sessions.
 type GameManager struct {
-	games map[string]*GameSession
-	mu    sync.RWMutex
+	games    map[string]*GameSession
+	waitQueue []*GameSession // matchmaking queue
+	mu       sync.RWMutex
 }
 
 // NewGameManager creates a new game manager.
 func NewGameManager() *GameManager {
 	return &GameManager{
-		games: make(map[string]*GameSession),
+		games:    make(map[string]*GameSession),
+		waitQueue: make([]*GameSession, 0),
 	}
 }
 
@@ -109,11 +111,19 @@ type LegalMoveInfo struct {
 	Promotion int `json:"promotion"`
 }
 
+// MatchmakeResponse is the REST response for matchmaking.
+type MatchmakeResponse struct {
+	GameID string `json:"gameId"`
+	Color  string `json:"color"`
+	Status string `json:"status"` // "waiting" or "matched"
+}
+
 // TimerUpdateResponse is sent periodically with timer info.
 type TimerUpdateResponse struct {
 	Type      string `json:"type"`
 	WhiteTime int64  `json:"whiteTime"`
 	BlackTime int64  `json:"blackTime"`
+	IsCheck   bool   `json:"isCheck"`
 }
 
 // GameOverResponse signals game end.
@@ -190,15 +200,63 @@ func (gm *GameManager) JoinGame(id string) (PlayerColor, error) {
 	session.mu.Lock()
 	defer session.mu.Unlock()
 
-	if !session.WhiteJoined {
-		session.WhiteJoined = true
-		return ColorWhite, nil
-	}
 	if !session.BlackJoined {
 		session.BlackJoined = true
 		return ColorBlack, nil
 	}
+	if !session.WhiteJoined {
+		session.WhiteJoined = true
+		return ColorWhite, nil
+	}
 	return ColorSpectator, nil
+}
+
+// Matchmake finds an opponent or creates a waiting game.
+func (gm *GameManager) Matchmake(timeMs int64) (*GameSession, string, string) {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+
+	// Look for a waiting game with same time control
+	for i, session := range gm.waitQueue {
+		session.mu.Lock()
+		if !session.BlackJoined && session.GameState.Position.WhiteKingTime == timeMs {
+			session.BlackJoined = true
+			session.mu.Unlock()
+			// Remove from queue
+			gm.waitQueue = append(gm.waitQueue[:i], gm.waitQueue[i+1:]...)
+			return session, "black", "matched"
+		}
+		session.mu.Unlock()
+	}
+
+	// No match found — create a new game and wait
+	id := generateID()
+	for {
+		if _, exists := gm.games[id]; !exists {
+			break
+		}
+		id = generateID()
+	}
+
+	var gs *game.GameState
+	if timeMs > 0 {
+		gs = game.InitializeGameWithTime(timeMs)
+	} else {
+		gs = game.InitializeGame()
+	}
+
+	session := &GameSession{
+		ID:          id,
+		GameState:   gs,
+		Players:     make([]*PlayerConn, 2),
+		CreatedAt:   time.Now(),
+		TimerDone:   make(chan struct{}),
+		WhiteJoined: true,
+	}
+
+	gm.games[id] = session
+	gm.waitQueue = append(gm.waitQueue, session)
+	return session, "white", "waiting"
 }
 
 // BuildGameStateResponse converts internal state to JSON-friendly format.
@@ -341,6 +399,7 @@ func (session *GameSession) StartTimerTicker() {
 
 				wt := gs.Position.WhiteKingTime
 				bt := gs.Position.BlackKingTime
+				isCheck := gs.IsCheck
 
 				// Deduct elapsed time from active player
 				if !session.LastMoveAt.IsZero() {
@@ -363,6 +422,7 @@ func (session *GameSession) StartTimerTicker() {
 					Type:      "TIMER_UPDATE",
 					WhiteTime: wt,
 					BlackTime: bt,
+					IsCheck:   isCheck,
 				}
 				session.BroadcastToAll(update)
 
