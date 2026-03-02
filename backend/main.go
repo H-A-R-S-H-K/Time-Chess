@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 )
 
 func main() {
@@ -28,8 +29,12 @@ func main() {
 		fmt.Fprintf(w, `{"service":"chess-backend","status":"running"}`)
 	})
 
-	addr := "0.0.0.0:8080"
-	log.Printf("♟  Chess server starting on http://127.0.0.1:8080")
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	addr := "0.0.0.0:" + port
+	log.Printf("♟  Chess server starting on http://127.0.0.1:%s", port)
 	log.Printf("   REST:      POST /api/game/create, POST /api/game/join, GET /api/game/{id}")
 	log.Printf("   WebSocket: ws://127.0.0.1:8080/ws/{gameId}?color=white|black")
 

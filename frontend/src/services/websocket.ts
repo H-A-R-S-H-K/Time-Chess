@@ -1,6 +1,6 @@
 import type { GameStateResponse } from './api';
 
-const WS_BASE = 'ws://127.0.0.1:8080/ws';
+const WS_BASE = import.meta.env.VITE_WS_BASE || 'ws://127.0.0.1:8080/ws';
 
 export type MessageHandler = (data: GameStateResponse | TimerUpdate | GameOver | ErrorMsg) => void;
 
